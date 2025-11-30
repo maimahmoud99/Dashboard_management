@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useSelector } from "react-redux";
 import type { RootState } from "@/store/store";
 import ProjectTable from "./components/ProjectTable";
+import ProjectCharts from "./components/ProjectCharts";
 import Cookies from "js-cookie";
 import { TableSkeleton } from "@/app/dashboard/components/Skeleton";
 import { useRealtime } from "@/lib/RealtimeContext";
@@ -167,6 +168,11 @@ export default function DashboardPage() {
             </div>
           </div>
         )}
+        
+        {/* Charts */}
+        <ProjectCharts projects={projects} />
+        
+        {/* Table */}
         <ProjectTable projects={projects} setProjects={setProjects} role={role} />
       </main>
     </div>

@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
 "use client";
-import React, { createContext, useContext, useCallback, useRef, useEffect } from "react";
-import useWebSocket from "react-use-websocket";
+
+import React, { createContext, useContext, useCallback, useEffect, useRef } from "react";
 
 type RealtimeUpdate = {
   type: "task_updated" | "project_updated";
@@ -20,33 +19,98 @@ type RealtimeContextType = {
 
 const RealtimeContext = createContext<RealtimeContextType | null>(null);
 
+const CHANNEL_NAME = "project_updates";
+
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const listenersRef = useRef<Set<(update: RealtimeUpdate) => void>>(new Set());
-
-  const { sendMessage, lastMessage } = useWebSocket("ws://localhost:8080", {
-    shouldReconnect: () => true,
-  });
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
-    if (lastMessage) {
-      const update: RealtimeUpdate = JSON.parse(lastMessage.data);
-      listenersRef.current.forEach((listener) => listener(update));
-    }
-  }, [lastMessage]);
+    // Only run on client side
+    if (typeof window === "undefined") return;
 
-  const broadcastUpdate = useCallback(
-    (update: Omit<RealtimeUpdate, "timestamp">) => {
-      const newUpdate: RealtimeUpdate = { ...update, timestamp: Date.now() };
-      sendMessage(JSON.stringify(newUpdate));
-      listenersRef.current.forEach((listener) => listener(newUpdate)); 
-    },
-    [sendMessage]
-  );
+    // Try to use BroadcastChannel
+    if ("BroadcastChannel" in window) {
+      try {
+        const channel = new BroadcastChannel(CHANNEL_NAME);
+        channelRef.current = channel;
+
+        channel.onmessage = (event: MessageEvent) => {
+          const update: RealtimeUpdate = event.data;
+          
+          // Notify all local listeners
+          listenersRef.current.forEach((listener) => {
+            listener(update);
+          });
+        };
+
+        return () => {
+          channel.close();
+          channelRef.current = null;
+        };
+      } catch (err) {
+        console.error("BroadcastChannel error:", err);
+      }
+    }
+    
+    // Fallback to localStorage (separate condition to avoid TypeScript issues)
+    console.warn("BroadcastChannel not supported - using localStorage fallback");
+    
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "realtime_update" && e.newValue) {
+        try {
+          const update: RealtimeUpdate = JSON.parse(e.newValue);
+          listenersRef.current.forEach((listener) => {
+            listener(update);
+          });
+        } catch (err) {
+          console.error("Failed to parse update:", err);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, []);
+
+  const broadcastUpdate = useCallback((update: Omit<RealtimeUpdate, "timestamp">) => {
+    const newUpdate: RealtimeUpdate = {
+      ...update,
+      timestamp: Date.now(),
+    };
+
+    // Broadcast to other tabs using BroadcastChannel
+    if (channelRef.current) {
+      try {
+        channelRef.current.postMessage(newUpdate);
+      } catch (err) {
+        console.error("Failed to broadcast update:", err);
+      }
+    } else if (typeof window !== "undefined") {
+      // Fallback to localStorage
+      try {
+        localStorage.setItem("realtime_update", JSON.stringify(newUpdate));
+      } catch (err) {
+        console.error("Failed to save update:", err);
+      }
+    }
+
+    // Also notify local listeners immediately
+    listenersRef.current.forEach((listener) => {
+      listener(newUpdate);
+    });
+  }, []);
 
   const subscribeToUpdates = useCallback(
     (callback: (update: RealtimeUpdate) => void) => {
       listenersRef.current.add(callback);
-      return () => listenersRef.current.delete(callback);
+      
+      return () => {
+        listenersRef.current.delete(callback);
+      };
     },
     []
   );
@@ -60,7 +124,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
 export function useRealtime() {
   const context = useContext(RealtimeContext);
-  if (!context) throw new Error("useRealtime must be used within RealtimeProvider");
+  if (!context) {
+    throw new Error("useRealtime must be used within RealtimeProvider");
+  }
   return context;
 }
-
