@@ -1,12 +1,13 @@
-"use client";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-import React, { createContext, useContext, useCallback, useRef } from "react";
+"use client";
+import React, { createContext, useContext, useCallback, useRef, useEffect } from "react";
+import useWebSocket from "react-use-websocket";
 
 type RealtimeUpdate = {
   type: "task_updated" | "project_updated";
   projectId: number;
   taskId?: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any;
   timestamp: number;
   user: string;
@@ -22,26 +23,30 @@ const RealtimeContext = createContext<RealtimeContextType | null>(null);
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const listenersRef = useRef<Set<(update: RealtimeUpdate) => void>>(new Set());
 
-  const broadcastUpdate = useCallback((update: Omit<RealtimeUpdate, "timestamp">) => {
-    const newUpdate: RealtimeUpdate = {
-      ...update,
-      timestamp: Date.now(),
-    };
+  const { sendMessage, lastMessage } = useWebSocket("ws://localhost:8080", {
+    shouldReconnect: () => true,
+  });
 
-    // Notify all listeners
-    listenersRef.current.forEach((listener) => {
-      listener(newUpdate);
-    });
-  }, []);
+  useEffect(() => {
+    if (lastMessage) {
+      const update: RealtimeUpdate = JSON.parse(lastMessage.data);
+      listenersRef.current.forEach((listener) => listener(update));
+    }
+  }, [lastMessage]);
+
+  const broadcastUpdate = useCallback(
+    (update: Omit<RealtimeUpdate, "timestamp">) => {
+      const newUpdate: RealtimeUpdate = { ...update, timestamp: Date.now() };
+      sendMessage(JSON.stringify(newUpdate));
+      listenersRef.current.forEach((listener) => listener(newUpdate)); 
+    },
+    [sendMessage]
+  );
 
   const subscribeToUpdates = useCallback(
     (callback: (update: RealtimeUpdate) => void) => {
       listenersRef.current.add(callback);
-      
-      // Return cleanup function
-      return () => {
-        listenersRef.current.delete(callback);
-      };
+      return () => listenersRef.current.delete(callback);
     },
     []
   );
@@ -55,8 +60,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
 export function useRealtime() {
   const context = useContext(RealtimeContext);
-  if (!context) {
-    throw new Error("useRealtime must be used within RealtimeProvider");
-  }
+  if (!context) throw new Error("useRealtime must be used within RealtimeProvider");
   return context;
 }
+
